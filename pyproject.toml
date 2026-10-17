@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "logic8"
+version = "0.1.0"
+description = "Agent-friendly CLI for the Saleae Logic 8 that talks to the hardware directly (no Saleae software)"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Claude Opus 5.5 (Anthropic)" }, { name = "Stan Jammes", email = "38524713+stanjammes@users.noreply.github.com" }]
+requires-python = ">=3.10"
+classifiers = [
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Hardware",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+]
+dependencies = ["numpy", "libusb1"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+logic8 = "logic8.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
