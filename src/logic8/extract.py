@@ -1,22 +1,21 @@
-#!/usr/bin/env python3
 """Extract the Logic 8 FX2 firmware and ECP5 bitstreams from Saleae's Logic 2 AppImage.
 
 Nothing from the AppImage is executed: the squashfs is unpacked with 7z and the
 native library is scanned for the embedded Intel-hex firmware and Lattice
-bitstreams. Output goes to ~/.local/share/logic8 (override with --out).
+bitstreams. Output goes to ~/.local/share/logic8 (or $LOGIC8_BLOBS).
 
-    venv/bin/python tools/extract_blobs.py Logic-2.x.y-linux-x64.AppImage
-    venv/bin/python tools/extract_blobs.py --lib path/to/libgraph_server_shared.so
+    logic8 setup Logic-2.x.y-linux-x64.AppImage
+    logic8 setup --lib path/to/libgraph_server_shared.so
 """
-import argparse
 import hashlib
 import json
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
+
+from .device import BLOB_DIR
 
 LIB_REL = "usr/lib/logic/resources/linux-x64/libgraph_server_shared.so"
 TARGET_VID_PID = ("21a9", "1004")
@@ -68,52 +67,50 @@ def find_bitstreams(lib):
 
 def unpack_appimage(appimage, workdir):
     if not shutil.which("7z"):
-        sys.exit("7z not found (needed to unpack the AppImage squashfs without running it)")
+        raise ValueError("7z not found (install p7zip; it unpacks the AppImage without running it)")
     subprocess.run(["7z", "x", "-y", f"-o{workdir}", str(appimage), LIB_REL],
                    check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     lib = Path(workdir) / LIB_REL
     if not lib.exists():
-        sys.exit(f"{LIB_REL} not found in {appimage}")
+        raise ValueError(f"{LIB_REL} not found in {appimage}; is this a Logic 2 AppImage?")
     return lib
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("appimage", nargs="?", type=Path)
-    ap.add_argument("--lib", type=Path, help="use an already-unpacked libgraph_server_shared.so")
-    ap.add_argument("--out", type=Path, default=Path.home() / ".local/share/logic8")
-    args = ap.parse_args()
-    if not (args.appimage or args.lib):
-        ap.error("give an AppImage or --lib")
+def extract(appimage=None, lib=None, out=None):
+    """Write the Logic 8 firmware, bitstreams and manifest.json to ``out``; return the manifest."""
+    if not (appimage or lib):
+        raise ValueError("give a Logic 2 AppImage (or --lib)")
+    out = Path(out or BLOB_DIR)
+    src = Path(appimage or lib)
+    if not src.exists():
+        raise FileNotFoundError(f"{src} not found")
 
     with tempfile.TemporaryDirectory() as tmp:
-        lib_path = args.lib or unpack_appimage(args.appimage, tmp)
-        lib = lib_path.read_bytes()
+        lib_path = Path(lib) if lib else unpack_appimage(src, tmp)
+        data = lib_path.read_bytes()
 
-    args.out.mkdir(parents=True, exist_ok=True)
-    manifest = {"source": str(args.appimage or args.lib), "source_sha256": None, "firmware": None, "bitstreams": []}
-    if args.appimage:
-        manifest["source_sha256"] = hashlib.sha256(args.appimage.read_bytes()).hexdigest()
+    manifest = {"source": str(src), "source_sha256": None, "firmware": None, "bitstreams": []}
+    if appimage:
+        manifest["source_sha256"] = hashlib.sha256(src.read_bytes()).hexdigest()
 
-    for text, vid, pid in find_fx2_firmware(lib):
+    files = {}
+    for text, vid, pid in find_fx2_firmware(data):
         if (vid, pid) == TARGET_VID_PID:
-            p = args.out / "fx2-logic8.ihx"
-            p.write_text(text)
-            manifest["firmware"] = {"file": p.name, "sha256": hashlib.sha256(text.encode()).hexdigest()}
+            files["fx2-logic8.ihx"] = text.encode()
+            manifest["firmware"] = {"file": "fx2-logic8.ihx", "sha256": hashlib.sha256(text.encode()).hexdigest()}
 
-    for design, part, date, blob in find_bitstreams(lib):
+    for design, part, date, blob in find_bitstreams(data):
         if not design.startswith("Logic8_"):
             continue
-        p = args.out / f"fpga-logic8-{part}.bit"
-        p.write_bytes(blob)
-        manifest["bitstreams"].append({"file": p.name, "part": part, "design": design, "date": date,
+        name = f"fpga-logic8-{part}.bit"
+        files[name] = blob
+        manifest["bitstreams"].append({"file": name, "part": part, "design": design, "date": date,
                                        "size": len(blob), "sha256": hashlib.sha256(blob).hexdigest()})
 
     if not manifest["firmware"] or not manifest["bitstreams"]:
-        sys.exit("Logic 8 firmware or bitstreams not found; Saleae may have changed the packaging")
-    (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2))
-    print(json.dumps(manifest, indent=2))
-
-
-if __name__ == "__main__":
-    main()
+        raise ValueError("Logic 8 firmware or bitstreams not found; Saleae may have changed the packaging")
+    out.mkdir(parents=True, exist_ok=True)
+    for name, content in files.items():
+        (out / name).write_bytes(content)
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    return manifest | {"output": str(out)}

@@ -110,7 +110,7 @@ def load_ihex(path):
 def blobs():
     manifest = BLOB_DIR / "manifest.json"
     if not manifest.exists():
-        raise DeviceError(f"no firmware in {BLOB_DIR}; run: venv/bin/python tools/extract_blobs.py <Logic AppImage>")
+        raise DeviceError(f"no firmware in {BLOB_DIR}; run: logic8 setup <Logic-2.x.y-linux-x64.AppImage>")
     return json.loads(manifest.read_text())
 
 

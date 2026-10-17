@@ -19,34 +19,37 @@ Written almost entirely by **Claude Opus 5.5** (Anthropic), working in Claude Co
   - Threshold voltage selection.
   - Logic Pro 8/16 and first-generation Logic devices.
 
-## Requirements
-
-- Linux, Python ≥ 3.10 and libusb-1.0.
-- `7z` (p7zip). It is only needed once, to unpack the firmware.
-- Access to the device without root:
-
-  ```sh
-  echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="21a9", ATTR{idProduct}=="1004", MODE="0666"' \
-    | sudo tee /etc/udev/rules.d/99-logic8.rules
-  sudo udevadm control --reload && sudo udevadm trigger
-  ```
-
 ## Install
 
-```sh
-python -m venv venv
-venv/bin/pip install .
-```
+You do this once per machine. After that, `logic8` works from any folder or project.
 
-## One-time firmware setup
+1. **Install the system packages:** Python ≥ 3.10, libusb-1.0, pipx and 7z (7z is only used in step 4). On Fedora: `sudo dnf install pipx p7zip p7zip-plugins libusb1`. On Debian/Ubuntu: `sudo apt install pipx 7zip libusb-1.0-0` (on older releases, `p7zip-full` instead of `7zip`).
 
-The device needs Saleae's FX2 firmware and FPGA bitstream every time it is plugged in. Download the Logic 2 AppImage for Linux from saleae.com (2.4.48 is tested), then extract them:
+2. **Give your user access to the device** (no root needed afterwards):
 
-```sh
-venv/bin/python tools/extract_blobs.py Logic-2.4.48-linux-x64.AppImage
-```
+   ```sh
+   echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="21a9", ATTR{idProduct}=="1004", MODE="0666"' \
+     | sudo tee /etc/udev/rules.d/99-logic8.rules
+   sudo udevadm control --reload && sudo udevadm trigger
+   ```
 
-The AppImage is unpacked with 7z and **never executed**. The firmware lands in `~/.local/share/logic8/`. You can delete the AppImage afterwards.
+3. **Install the `logic8` command:**
+
+   ```sh
+   pipx install git+https://github.com/stanjammes/logic8
+   ```
+
+4. **Extract the firmware.** The Logic 8 needs Saleae's FX2 firmware and FPGA bitstream every time it is plugged in, and this project can't ship them. Download the Logic 2 AppImage for Linux from saleae.com (version 2.4.48 is tested), then run:
+
+   ```sh
+   logic8 setup Logic-2.4.48-linux-x64.AppImage
+   ```
+
+   The AppImage is unpacked with 7z and **never executed**. The firmware goes to `~/.local/share/logic8/`, and you can delete the AppImage afterwards.
+
+5. **Check it works:** plug in the Logic 8 and run `logic8 init`. It should report `"fpga": "configured"`. You don't need to run `init` yourself after this: any capture command loads the firmware on its own after a replug, which takes about 5 s.
+
+To update later, run `pipx upgrade logic8`. To use logic8 inside one project's virtual environment instead, install it there with `pip install git+https://github.com/stanjammes/logic8`.
 
 ## Usage
 
@@ -105,7 +108,11 @@ The protocol bursts repeat every 10 ms. Flash it with `pio run -d firmware/teens
 
 ## Development
 
+To work on logic8 itself, clone the repo and install it in editable mode:
+
 ```sh
+git clone https://github.com/stanjammes/logic8 && cd logic8
+python -m venv venv
 venv/bin/pip install -e '.[test]'
 venv/bin/python -m pytest -q
 ```

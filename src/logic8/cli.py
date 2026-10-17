@@ -13,7 +13,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import __version__, analysis, decoders, device, formats
+from . import __version__, analysis, decoders, device, extract, formats
 
 
 class UsageError(Exception):
@@ -60,6 +60,10 @@ def emit(obj):
 
 def cmd_devices(a):
     emit({"devices": [device.describe(d) for d in device.find()]})
+
+
+def cmd_setup(a):
+    emit(extract.extract(a.appimage, a.lib, a.out))
 
 
 def cmd_init(a):
@@ -165,6 +169,12 @@ def build_parser():
 
     s = sub.add_parser("devices", help="list attached Logic 8 devices")
     s.set_defaults(fn=cmd_devices)
+
+    s = sub.add_parser("setup", help="extract the firmware from a Logic 2 AppImage (once)")
+    s.add_argument("appimage", nargs="?", type=Path, help="Logic-2.x.y-linux-x64.AppImage (unpacked, never run)")
+    s.add_argument("--lib", type=Path, help="use an already-unpacked libgraph_server_shared.so")
+    s.add_argument("--out", type=Path, help="output directory (default ~/.local/share/logic8 or $LOGIC8_BLOBS)")
+    s.set_defaults(fn=cmd_setup)
 
     s = sub.add_parser("init", help="load FX2 firmware and FPGA bitstream")
     s.add_argument("--serial")
