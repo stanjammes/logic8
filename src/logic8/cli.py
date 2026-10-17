@@ -1,7 +1,8 @@
-"""logic8: agent-friendly command line for the Saleae Logic 8.
+"""logic8: command line for the Saleae Logic 8, for people and agents.
 
-Every command prints one JSON document on stdout. Errors print
-{"error": ..., "code": n} on stderr and exit with that code:
+Results are compact plain text on stdout; add --json (anywhere on the line)
+for one JSON document instead. Errors go to stderr ("error: ..." or, with
+--json, {"error": ..., "code": n}) and exit with that code:
   2 usage, 3 no device / USB error, 4 trigger timeout, 1 other.
 """
 import argparse
@@ -13,7 +14,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import __version__, analysis, decoders, device, extract, formats
+from . import __version__, analysis, decoders, device, extract, formats, render
 
 
 class UsageError(Exception):
@@ -52,24 +53,31 @@ def parse_trigger(text):
     return {"channel": int(m.group(1)), "type": m.group(2)}
 
 
-def emit(obj):
-    print(json.dumps(obj, indent=2 if sys.stdout.isatty() else None))
+def emit(obj, a):
+    if a.json:
+        print(json.dumps(obj, indent=2 if sys.stdout.isatty() else None))
+    else:
+        print(render.render(a.cmd, obj))
+
+
+def report_error(msg, code, as_json):
+    print(json.dumps({"error": msg, "code": code}) if as_json else f"error: {msg}", file=sys.stderr)
 
 
 # --- commands ---------------------------------------------------------------
 
 def cmd_devices(a):
-    emit({"devices": [device.describe(d) for d in device.find()]})
+    emit({"devices": [device.describe(d) for d in device.find()]}, a)
 
 
 def cmd_setup(a):
-    emit(extract.extract(a.appimage, a.lib, a.out))
+    emit(extract.extract(a.appimage, a.lib, a.out), a)
 
 
 def cmd_init(a):
     dev = device.open_device(a.serial)
     fpga = dev.configure_fpga(force=a.force)
-    emit(dev.describe() | fpga)
+    emit(dev.describe() | fpga, a)
 
 
 def do_capture(a):
@@ -99,14 +107,14 @@ def cmd_capture(a):
         out["trigger_s"] = analysis.sig(cap.time(cap.trigger_sample))
     if a.summary:
         out["summary"] = analysis.summary(cap)
-    emit(out)
+    emit(out, a)
 
 
 def cmd_watch(a):
     cap = do_capture(a)
     if a.output:
         formats.save(cap, a.output)
-    emit(analysis.summary(cap) | ({"file": str(a.output)} if a.output else {}))
+    emit(analysis.summary(cap) | ({"file": str(a.output)} if a.output else {}), a)
 
 
 def cmd_summary(a):
@@ -115,12 +123,12 @@ def cmd_summary(a):
     if a.channels:
         keep = set(parse_channels(a.channels))
         s["channels"] = [c for c in s["channels"] if c["channel"] in keep]
-    emit(s)
+    emit(s, a)
 
 
 def cmd_edges(a):
     emit(analysis.edges(formats.load(a.file), a.channel, start_s=parse_duration(a.start) if a.start else 0.0,
-                        limit=a.limit))
+                        limit=a.limit), a)
 
 
 def cmd_decode(a):
@@ -130,11 +138,11 @@ def cmd_decode(a):
     try:
         frames = decoders.decode(cap, a.spec)
     except (ValueError, KeyError) as e:
-        raise UsageError(str(e)) from e
+        raise UsageError(e.args[0] if isinstance(e, KeyError) else str(e)) from e
     out = {"decoder": a.spec, "count": len(frames), "frames": frames[:a.limit], "truncated": len(frames) > a.limit}
     if decoders.parse_spec(a.spec)[0] == "uart":
         out["text"] = decoders.uart_text(frames)
-    emit(out)
+    emit(out, a)
 
 
 def sigrok_decode(a):
@@ -153,40 +161,49 @@ def sigrok_decode(a):
         raise UsageError(r.stderr.strip() or "sigrok-cli failed")
     lines = r.stdout.splitlines()
     emit({"decoder": a.spec, "via": "sigrok-cli", "count": len(lines), "lines": lines[:a.limit],
-          "truncated": len(lines) > a.limit})
+          "truncated": len(lines) > a.limit}, a)
 
 
 def cmd_convert(a):
     cap = formats.load(a.input)
     formats.save(cap, a.output)
-    emit({"input": str(a.input), "output": str(a.output), "samples": cap.num_samples})
+    emit({"input": str(a.input), "output": str(a.output), "samples": cap.num_samples}, a)
 
 
 # --- parser -----------------------------------------------------------------
 
-class JsonArgumentParser(argparse.ArgumentParser):
-    """Argument errors in the same JSON shape as every other error."""
+class ArgumentParser(argparse.ArgumentParser):
+    """Argument errors follow --json like every other error (decided before parsing)."""
+    as_json = False
 
     def error(self, message):
-        print(json.dumps({"error": f"{self.prog}: {message}", "code": 2}), file=sys.stderr)
+        if not self.as_json:
+            super().error(message)
+        report_error(f"{self.prog}: {message}", 2, True)
         sys.exit(2)
 
 
 def build_parser():
-    p = JsonArgumentParser(prog="logic8", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = ArgumentParser(prog="logic8", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--version", action="version", version=__version__)
+    p.add_argument("--json", action="store_true", help="print JSON instead of text")
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="print JSON instead of text")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("devices", help="list attached Logic 8 devices")
+    def add(name, **kw):
+        return sub.add_parser(name, parents=[common], **kw)
+
+    s = add("devices", help="list attached Logic 8 devices")
     s.set_defaults(fn=cmd_devices)
 
-    s = sub.add_parser("setup", help="extract the firmware from a Logic 2 AppImage (once)")
+    s = add("setup", help="extract the firmware from a Logic 2 AppImage (once)")
     s.add_argument("appimage", nargs="?", type=Path, help="Logic-2.x.y-linux-x64.AppImage (unpacked, never run)")
     s.add_argument("--lib", type=Path, help="use an already-unpacked libgraph_server_shared.so")
     s.add_argument("--out", type=Path, help="output directory (default ~/.local/share/logic8 or $LOGIC8_BLOBS)")
     s.set_defaults(fn=cmd_setup)
 
-    s = sub.add_parser("init", help="load FX2 firmware and FPGA bitstream")
+    s = add("init", help="load FX2 firmware and FPGA bitstream")
     s.add_argument("--serial")
     s.add_argument("--force", action="store_true", help="re-upload the bitstream even if the FPGA is running")
     s.set_defaults(fn=cmd_init)
@@ -204,28 +221,28 @@ def build_parser():
         s.add_argument("-o", "--output", type=Path, required=need_output,
                        help="capture file: .sr (PulseView), .vcd, .npz, .csv")
 
-    s = sub.add_parser("capture", help="capture to a file")
+    s = add("capture", help="capture to a file")
     capture_args(s, True)
     s.add_argument("--summary", action="store_true", help="include per-channel summary in the output")
     s.set_defaults(fn=cmd_capture)
 
-    s = sub.add_parser("watch", help="capture and summarise in one step")
+    s = add("watch", help="capture and summarise in one step")
     capture_args(s, False)
     s.set_defaults(fn=cmd_watch)
 
-    s = sub.add_parser("summary", help="per-channel statistics of a capture file")
+    s = add("summary", help="per-channel statistics of a capture file")
     s.add_argument("file", type=Path)
     s.add_argument("-c", "--channels")
     s.set_defaults(fn=cmd_summary)
 
-    s = sub.add_parser("edges", help="list transitions on one channel")
+    s = add("edges", help="list transitions on one channel")
     s.add_argument("file", type=Path)
     s.add_argument("-c", "--channel", type=int, required=True)
     s.add_argument("--from", dest="start", help="start time, e.g. 1.5ms")
     s.add_argument("--limit", type=int, default=100)
     s.set_defaults(fn=cmd_edges)
 
-    s = sub.add_parser("decode", help="decode a protocol",
+    s = add("decode", help="decode a protocol",
                        description="Built-in: uart:rx=0,baud=115200[,parity=even,bits=8,invert=1]  "
                                    "i2c:scl=0,sda=1  spi:clk=0,mosi=1[,miso=2,cs=3,mode=0,bits=8,order=msb]. "
                                    "With --sigrok, SPEC is a sigrok-cli -P string, e.g. can:can_rx=D0:bitrate=500000")
@@ -235,7 +252,7 @@ def build_parser():
     s.add_argument("--sigrok", action="store_true", help="decode with sigrok-cli (any of its 100+ decoders)")
     s.set_defaults(fn=cmd_decode)
 
-    s = sub.add_parser("convert", help="convert between capture formats")
+    s = add("convert", help="convert between capture formats")
     s.add_argument("input", type=Path)
     s.add_argument("output", type=Path)
     s.set_defaults(fn=cmd_convert)
@@ -243,6 +260,7 @@ def build_parser():
 
 
 def main(argv=None):
+    ArgumentParser.as_json = "--json" in (sys.argv[1:] if argv is None else argv)
     p = build_parser()
     a = p.parse_args(argv)
     try:
@@ -253,12 +271,12 @@ def main(argv=None):
         msg, code = str(e.args[0]), 2
     except (FileNotFoundError, ValueError) as e:
         msg, code = str(e), 2
-    except Exception as e:  # unexpected: still report as JSON
+    except Exception as e:  # unexpected: still report in the chosen format
         usb_err = type(e).__module__.startswith("usb")
         msg, code = (f"USB: {e}", 3) if usb_err else (f"{type(e).__name__}: {e}", 1)
     else:
         return 0
-    print(json.dumps({"error": msg, "code": code}), file=sys.stderr)
+    report_error(msg, code, a.json)
     return code
 
 

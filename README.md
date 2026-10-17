@@ -1,6 +1,8 @@
 # logic8
 
-A command-line tool for the Saleae Logic 8 that talks to the hardware directly, without Saleae's software. Every command prints JSON, so AI agents and scripts can capture signals, summarise them and decode protocols.
+A command-line tool for the Saleae Logic 8 that talks to the hardware directly, without Saleae's software. Output is compact plain text that people and AI agents can both read (and that costs agents fewer tokens than JSON). Add `--json` to any command for structured output in scripts. Use it to capture signals, summarise them and decode protocols.
+
+![logic8 capturing 50 ms of 8 test signals and printing a per-channel summary](docs/logic8_capture_screenshot.png)
 
 Written almost entirely by **Claude Opus 5.5** (Anthropic), working in Claude Code. See [Credits](#credits).
 
@@ -48,7 +50,7 @@ You do this once per machine. After that, `logic8` works from any folder or proj
 
    The AppImage is unpacked with 7z and **never executed**. The firmware goes to `~/.local/share/logic8/`, and you can delete the AppImage afterwards.
 
-5. **Check it works:** plug in the Logic 8 and run `logic8 init`. It should report `"fpga": "configured"` (or `"already configured"`). You don't need to run `init` yourself after this: any capture command loads the firmware on its own after a replug, which takes about 5 s.
+5. **Check it works:** plug in the Logic 8 and run `logic8 init`. It should report `fpga: configured` (or `fpga: already configured`). You don't need to run `init` yourself after this: any capture command loads the firmware on its own after a replug, which takes about 5 s.
 
 To update later, run `pipx reinstall logic8`. To use logic8 inside one project's virtual environment instead, install it there with `pip install git+https://github.com/stanjammes/logic8`.
 
@@ -69,7 +71,19 @@ logic8 decode cap.sr can:can_rx=D0:bitrate=500000 --sigrok   # any sigrok-cli -P
 logic8 convert cap.sr cap.vcd
 ```
 
-- **Output:** results are printed as JSON on stdout. Errors go to stderr as `{"error": ..., "code": n}`.
+A summary looks like this:
+
+```
+$ logic8 summary cap.sr -c 1,6,7
+25 MS/s  5M samples  200 ms
+ch  kind      freq       duty  period  edges  notes
+D1  periodic  1 kHz     25.0%  1 ms      400  jitter=0.004%
+D6  periodic  99.99 Hz  99.7%  10 ms      40  jitter=0.088%
+D7  periodic  100 kHz   50.0%  10 us   40000  jitter=0.8%
+```
+
+- **Output:** plain text on stdout, one record per line with fixed columns (`-` marks a missing value). Times use units the CLI accepts back, so an `edges` page ends with a `more: --from 20us` hint you can paste. Errors go to stderr as `error: ...`.
+- **`--json`:** accepted anywhere on the command line. It prints one JSON document instead, and errors become `{"error": ..., "code": n}` on stderr.
 - **Exit codes:** 2 means bad arguments, 3 a device or USB error, 4 a trigger timeout, and 1 anything else.
 - **Memory:** a capture is held in RAM while it's recorded, peaking at about 5 bytes per sample (100 MS/s for 1 s is about 0.5 GB). Saved files are much smaller, because they store edges: that capture is 18 KB as `.npz`.
 - **Sample rates:** 200 MHz / k, up to 100 MS/s. USB bandwidth limits rate × channels to 200 M, so use `-c` to capture fewer channels at higher rates:
