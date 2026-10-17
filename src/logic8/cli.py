@@ -2,7 +2,7 @@
 
 Every command prints one JSON document on stdout. Errors print
 {"error": ..., "code": n} on stderr and exit with that code:
-  2 usage, 3 no device / USB error, 4 trigger timeout, 5 not implemented yet, 1 other.
+  2 usage, 3 no device / USB error, 4 trigger timeout, 1 other.
 """
 import argparse
 import json
@@ -95,6 +95,8 @@ def cmd_capture(a):
     formats.save(cap, a.output)
     out = {"file": str(a.output), "sample_rate_hz": cap.sample_rate, "samples": cap.num_samples,
            "duration_s": analysis.sig(cap.duration)}
+    if cap.trigger_sample is not None:
+        out["trigger_s"] = analysis.sig(cap.time(cap.trigger_sample))
     if a.summary:
         out["summary"] = analysis.summary(cap)
     emit(out)
@@ -162,8 +164,16 @@ def cmd_convert(a):
 
 # --- parser -----------------------------------------------------------------
 
+class JsonArgumentParser(argparse.ArgumentParser):
+    """Argument errors in the same JSON shape as every other error."""
+
+    def error(self, message):
+        print(json.dumps({"error": f"{self.prog}: {message}", "code": 2}), file=sys.stderr)
+        sys.exit(2)
+
+
 def build_parser():
-    p = argparse.ArgumentParser(prog="logic8", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = JsonArgumentParser(prog="logic8", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--version", action="version", version=__version__)
     sub = p.add_subparsers(dest="cmd", required=True)
 

@@ -95,6 +95,15 @@ def test_format_roundtrip(tmp_path, ext):
     assert back.sample_rate == cap.sample_rate and back.num_samples == cap.num_samples
     assert sorted(back.channels) == [0, 3, 7]
     assert np.array_equal(back.to_samples(), cap.to_samples())
+    assert back.trigger_sample is None
+
+
+@pytest.mark.parametrize("ext", [".sr", ".vcd", ".npz"])
+def test_format_keeps_trigger(tmp_path, ext):
+    cap = Capture.from_samples(np.repeat(np.uint8([0, 1, 0]), 50), 1e6, channels=[0], trigger_sample=50)
+    p = tmp_path / f"cap{ext}"
+    formats.save(cap, p)
+    assert formats.load(p).trigger_sample == 50
 
 
 def test_csv(tmp_path):

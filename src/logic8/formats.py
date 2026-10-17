@@ -16,6 +16,7 @@ import numpy as np
 from .capture import Capture, Channel
 
 SR_CHUNK = 4 << 20
+SR_TRIGGER = "logic8-trigger"  # trigger sample number; sigrok's format has no field for it
 
 
 def save(cap, path):
@@ -60,6 +61,8 @@ def save_sr(cap, path):
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("version", "2")
         z.writestr("metadata", "\n".join(lines) + "\n")
+        if cap.trigger_sample is not None:
+            z.writestr(SR_TRIGGER, str(cap.trigger_sample))  # extra member; sigrok ignores it
         for n, off in enumerate(range(0, max(len(samples), 1), SR_CHUNK)):
             z.writestr(f"logic-1-{n + 1}", samples[off:off + SR_CHUNK].tobytes())
 
@@ -74,9 +77,10 @@ def load_sr(path):
         names = [n for n in z.namelist() if n == base or n.startswith(base + "-")]
         names.sort(key=lambda n: int(n.rsplit("-", 1)[1]) if n != base else 0)
         raw = b"".join(z.read(n) for n in names)
+        trig = int(z.read(SR_TRIGGER)) if SR_TRIGGER in z.namelist() else None
     data = np.frombuffer(raw, dtype=np.uint8).reshape(-1, unitsize)[:, 0]  # channels 0-7
     probes = [int(k[5:]) - 1 for k in dev if re.fullmatch(r"probe\d+", k)]
-    return Capture.from_samples(data, parse_rate(dev["samplerate"]), [p for p in probes if p < 8])
+    return Capture.from_samples(data, parse_rate(dev["samplerate"]), [p for p in probes if p < 8], trig)
 
 
 # --- VCD --------------------------------------------------------------------
@@ -93,7 +97,8 @@ def save_vcd(cap, path):
     ids = {ch: chr(33 + i) for i, ch in enumerate(sorted(cap.channels))}
     events = sorted((t, ch, lvl) for ch, c in cap.channels.items() for t, lvl in c.edges())
     with open(path, "w") as f:
-        f.write(f"$comment samplerate={cap.sample_rate:g} samples={cap.num_samples} $end\n")
+        trig = "" if cap.trigger_sample is None else f" trigger={cap.trigger_sample}"
+        f.write(f"$comment samplerate={cap.sample_rate:g} samples={cap.num_samples}{trig} $end\n")
         f.write(f"$timescale {unit} $end\n$scope module logic8 $end\n")
         for ch, i in ids.items():
             f.write(f"$var wire 1 {i} D{ch} $end\n")
@@ -111,7 +116,7 @@ def save_vcd(cap, path):
 
 def load_vcd(path):
     text = Path(path).read_text()
-    m = re.search(r"\$comment samplerate=(\S+) samples=(\d+)", text)
+    m = re.search(r"\$comment samplerate=(\S+) samples=(\d+)(?: trigger=(\d+))?", text)
     ts = re.search(r"\$timescale\s+(\d+)\s*(s|ms|us|ns|ps|fs)\s*\$end", text)
     tick_s = int(ts.group(1)) * {"s": 1, "ms": 1e-3, "us": 1e-6, "ns": 1e-9, "ps": 1e-12, "fs": 1e-15}[ts.group(2)] if ts else 1e-9
     rate = float(m.group(1)) if m else 1 / tick_s
@@ -135,7 +140,7 @@ def load_vcd(path):
                 trans[ch].append(t)
                 level[ch] = v
     n = int(m.group(2)) if m else t
-    cap = Capture(rate, n)
+    cap = Capture(rate, n, trigger_sample=int(m.group(3)) if m and m.group(3) else None)
     for ch in ids.values():
         cap.channels[ch] = Channel(ch, initial.get(ch, 0), np.array(trans[ch], dtype=np.int64))
     return cap

@@ -67,7 +67,7 @@ def channel_summary(cap, ch):
             return out
     out["kind"] = "irregular"
     baud = guess_baud(out.get("min_pulse_s"))
-    if baud and n >= 4:
+    if baud and n >= 4 and c.initial == final == 1:  # UART idles high
         out["uart_baud_guess"] = baud
     return out
 
